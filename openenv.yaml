@@ -1,0 +1,11 @@
+name: FinAgentEnv
+description: Personal finance environment with debt, investments, market regimes, and life events.
+version: 1.0.0
+entry_point: env.environment:FinAgentEnv
+tasks:
+  - id: debt_trap
+    grader: env.graders:grade_debt_trap
+  - id: balanced_growth
+    grader: env.graders:grade_balanced_growth
+  - id: adversarial_crash
+    grader: env.graders:grade_adversarial_crash
