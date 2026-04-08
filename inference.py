@@ -2,7 +2,7 @@ import asyncio
 import os
 import json
 import random
-from typing import List, Dict, Any
+from typing import List
 from openai import OpenAI
 
 # ----------------------------------------------------------------------
@@ -323,8 +323,9 @@ def grade_adversarial_crash(env) -> float:
 # Inference script
 # ----------------------------------------------------------------------
 
-API_BASE_URL = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
-API_KEY = os.getenv("OPENAI_API_KEY")
+# Must use exactly the environment variables provided by the validator
+API_BASE_URL = os.getenv("API_BASE_URL")   # No default – will be provided
+API_KEY = os.getenv("API_KEY")             # No default – will be provided
 MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
 MAX_STEPS = 6
 SUCCESS_SCORE_THRESHOLD = 0.6
@@ -340,10 +341,6 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]):
     print(f"[END] success={success} steps={steps} score={score:.2f} rewards={rewards}", flush=True)
 
 def get_llm_action(client: OpenAI, obs: Observation, step: int, last_reward: float, history: List[str]) -> Action:
-    # Fallback if API key missing
-    if not API_KEY:
-        return Action(action_type="reduce_spending", amount=0)
-
     prompt = f"""You are a financial advisor. Based on the current financial state, choose ONE action and an amount.
 Current month: {obs.month}
 Income: {obs.income}, Fixed expenses: {obs.fixed_expenses}, Variable expenses: {obs.variable_expenses}
@@ -356,22 +353,19 @@ Last reward: {last_reward:.2f}
 History: {history[-3:]}
 Possible actions: pay_credit_card, pay_personal_loan, invest_stocks, invest_crypto, invest_bonds, invest_fd, invest_mutual_funds, invest_commodities, buy_real_estate, build_emergency_fund, reduce_spending.
 Respond with JSON: {{"action_type": "...", "amount": <number>}}"""
-    try:
-        response = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            response_format={"type": "json_object"}
-        )
-        data = json.loads(response.choices[0].message.content)
-        return Action(data["action_type"], float(data.get("amount", 0)))
-    except Exception as e:
-        print(f"[DEBUG] LLM error: {e}", flush=True)
-        return Action("reduce_spending", 0)
+    response = client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+        response_format={"type": "json_object"}
+    )
+    data = json.loads(response.choices[0].message.content)
+    return Action(data["action_type"], float(data.get("amount", 0)))
 
 async def run_task(task_id: str, seed: int = 42):
     env = FinAgentEnv()
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY) if API_KEY else None
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+
     rewards = []
     history = []
 
@@ -381,11 +375,7 @@ async def run_task(task_id: str, seed: int = 42):
     last_reward = 0.0
 
     for step in range(1, MAX_STEPS + 1):
-        if client:
-            action = get_llm_action(client, obs, step, last_reward, history)
-        else:
-            # random policy if no API key
-            action = Action(random.choice(["reduce_spending", "pay_credit_card"]), 1000)
+        action = get_llm_action(client, obs, step, last_reward, history)
         result = env.step(action)
         obs = result.observation
         reward = result.reward
