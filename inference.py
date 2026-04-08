@@ -1,7 +1,12 @@
 import asyncio
 import os
+import sys
 import json
 from typing import List
+
+# Add current directory to path so 'env' package can be found
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from openai import OpenAI
 from env.environment import FinAgentEnv
 from env.models import Action
@@ -39,18 +44,18 @@ Possible actions: pay_credit_card, pay_personal_loan, invest_stocks, invest_cryp
 Respond with a JSON object: {{"action_type": "...", "amount": <number>}}.
 If action does not use amount, set amount to 0."""
     
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.7,
-        response_format={"type": "json_object"}
-    )
-    content = response.choices[0].message.content
     try:
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            response_format={"type": "json_object"}
+        )
+        content = response.choices[0].message.content
         data = json.loads(content)
         return Action(action_type=data["action_type"], amount=float(data.get("amount", 0)))
-    except:
-        # Fallback safe action
+    except Exception as e:
+        print(f"[DEBUG] LLM call failed: {e}", flush=True)
         return Action(action_type="reduce_spending", amount=0)
 
 async def run_task(task_id: str, seed: int = 42):
@@ -61,32 +66,47 @@ async def run_task(task_id: str, seed: int = 42):
 
     log_start(task=task_id, env="FinAgentEnv", model=MODEL_NAME)
 
-    obs = env.reset(task_id=task_id, seed=seed)
+    try:
+        obs = env.reset(task_id=task_id, seed=seed)
+    except Exception as e:
+        print(f"[DEBUG] reset failed: {e}", flush=True)
+        log_end(success=False, steps=0, score=0.0, rewards=[])
+        return 0.0
+
     last_reward = 0.0
 
     for step in range(1, MAX_STEPS + 1):
-        action = get_llm_action(client, obs, step, last_reward, history)
-        result = env.step(action)
-        obs = result.observation
-        reward = result.reward
-        done = result.done
-        rewards.append(reward)
-        last_reward = reward
-        history.append(f"Step {step}: {action.action_type} (amount {action.amount}) -> reward {reward:.2f}")
-        log_step(step, action.action_type, reward, done, None)
-        if done:
+        try:
+            action = get_llm_action(client, obs, step, last_reward, history)
+            result = env.step(action)
+            obs = result.observation
+            reward = result.reward
+            done = result.done
+            rewards.append(reward)
+            last_reward = reward
+            history.append(f"Step {step}: {action.action_type} (amount {action.amount}) -> reward {reward:.2f}")
+            log_step(step, action.action_type, reward, done, None)
+            if done:
+                break
+        except Exception as e:
+            print(f"[DEBUG] step {step} failed: {e}", flush=True)
+            log_step(step, "", 0.0, True, str(e))
             break
 
     # Use the appropriate grader
-    if task_id == "debt_trap":
-        from env.graders import grade_debt_trap
-        score = grade_debt_trap(env)
-    elif task_id == "balanced_growth":
-        from env.graders import grade_balanced_growth
-        score = grade_balanced_growth(env)
-    else:
-        from env.graders import grade_adversarial_crash
-        score = grade_adversarial_crash(env)
+    try:
+        if task_id == "debt_trap":
+            from env.graders import grade_debt_trap
+            score = grade_debt_trap(env)
+        elif task_id == "balanced_growth":
+            from env.graders import grade_balanced_growth
+            score = grade_balanced_growth(env)
+        else:
+            from env.graders import grade_adversarial_crash
+            score = grade_adversarial_crash(env)
+    except Exception as e:
+        print(f"[DEBUG] grader failed: {e}", flush=True)
+        score = 0.0
 
     success = score >= SUCCESS_SCORE_THRESHOLD
     log_end(success, len(rewards), score, rewards)
