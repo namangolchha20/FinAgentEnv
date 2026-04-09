@@ -289,10 +289,13 @@ class FinAgentEnv:
         return self.state
 
 # ----------------------------------------------------------------------
-# Graders (self-contained) – with strict (0,1) clamping
+# Graders (self-contained) – with clamping to avoid rounding to 0.00/1.00
 # ----------------------------------------------------------------------
 
-EPS = 1e-9
+# Clamp raw scores to [0.0051, 0.9949] so that after rounding to 2 decimals,
+# they become at least 0.01 and at most 0.99.
+LOW = 0.0051
+HIGH = 0.9949
 
 def grade_debt_trap(env) -> float:
     state = env.state
@@ -300,8 +303,8 @@ def grade_debt_trap(env) -> float:
     raw = max(0, (35000 - debt_cc) / 35000) * 0.7
     if state["emergency_fund"] >= 10000:
         raw += 0.3
-    # Clamp to (0,1)
-    return max(EPS, min(1.0 - EPS, raw))
+    # Clamp to [LOW, HIGH]
+    return max(LOW, min(HIGH, raw))
 
 def grade_balanced_growth(env) -> float:
     state = env.state
@@ -311,7 +314,7 @@ def grade_balanced_growth(env) -> float:
     debt_score = max(0, (50000 - debt_total) / 50000) * 0.5
     credit_score = max(0, (state["credit_score"] - 600) / 250) * 0.2
     raw = net_gain * 0.3 + debt_score + credit_score
-    return max(EPS, min(1.0 - EPS, raw))
+    return max(LOW, min(HIGH, raw))
 
 def grade_adversarial_crash(env) -> float:
     state = env.state
@@ -321,7 +324,7 @@ def grade_adversarial_crash(env) -> float:
     ef_score = min(1.0, state["emergency_fund"] / required_ef) * 0.4
     credit_score = 0.2 if state["credit_score"] >= 650 else 0.0
     raw = net_score + ef_score + credit_score
-    return max(EPS, min(1.0 - EPS, raw))
+    return max(LOW, min(HIGH, raw))
 
 # ----------------------------------------------------------------------
 # Inference script with robust error handling
