@@ -19,10 +19,9 @@ An agent manages six monthly steps of real-world financial decisions: cash flow,
 ```bash
 git clone https://github.com/namangolchha20/FinAgentEnv.git
 cd FinAgentEnv
-pip install -r requirements-dev.txt
+pip install -r requirements.txt
 pip install -e .
 openenv validate
-python -m pytest tests/ -q
 ```
 
 Run the HTTP server (used by Hugging Face Spaces):
@@ -163,11 +162,13 @@ tests/test_env.py     # pytest suite (25 tests)
 ## Development
 
 ```bash
-pip install -r requirements-dev.txt
-pip install -e .
+pip install -r requirements.txt
+pip install -e ".[dev]"
 python -m pytest tests/ -q
 openenv validate
 ```
+
+`[dev]` adds `pytest` and `openai` (for `inference.py`).
 
 ## License
 
