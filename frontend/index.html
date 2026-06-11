@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FinAgent — Personal Finance Simulator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<link rel="stylesheet" href="style.css?v=3" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>" />
+</head>
+<body>
+<div class="bg-glow bg-glow-1"></div>
+<div class="bg-glow bg-glow-2"></div>
+
+<!-- ============================== START SCREEN ============================== -->
+<section id="screen-start" class="screen active">
+  <header class="hero">
+    <div class="logo-mark">Fin<span>Agent</span></div>
+    <h1>Six months. One portfolio.<br /><span class="grad-text">Outsmart the market.</span></h1>
+    <p class="hero-sub">Manage income, debt, investments, real estate and life's curveballs in a
+       reinforcement-learning grade financial simulator.</p>
+  </header>
+
+  <div class="task-grid" id="task-grid"><!-- task cards injected --></div>
+
+  <div class="start-controls">
+    <label class="seed-field">
+      <span>Seed</span>
+      <input type="number" id="seed-input" placeholder="random" />
+    </label>
+    <button id="btn-start" class="btn btn-primary btn-lg" disabled>Select a scenario</button>
+  </div>
+</section>
+
+<!-- ============================== GAME SCREEN ============================== -->
+<section id="screen-game" class="screen">
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="logo-mark small">Fin<span>Agent</span></div>
+      <div class="task-chip">
+        <span id="hud-task-name">—</span>
+        <span class="diff-badge" id="hud-task-diff">—</span>
+      </div>
+    </div>
+    <div class="month-track" id="month-track"></div>
+    <div class="topbar-right">
+      <div class="regime-badge" id="hud-regime">—</div>
+      <button class="btn btn-ghost" id="btn-restart">↺ Restart</button>
+    </div>
+  </header>
+
+  <div class="kpi-row">
+    <article class="kpi-card kpi-networth">
+      <span class="kpi-label">Net Worth</span>
+      <span class="kpi-value" id="kpi-networth">$0</span>
+      <span class="kpi-delta" id="kpi-networth-delta"></span>
+    </article>
+    <article class="kpi-card">
+      <span class="kpi-label">Savings</span>
+      <span class="kpi-value" id="kpi-savings">$0</span>
+      <span class="kpi-sub" id="kpi-cashflow"></span>
+    </article>
+    <article class="kpi-card">
+      <span class="kpi-label">Emergency Fund</span>
+      <span class="kpi-value" id="kpi-ef">$0</span>
+      <div class="mini-bar"><div class="mini-bar-fill" id="kpi-ef-bar"></div></div>
+      <span class="kpi-sub" id="kpi-ef-target"></span>
+    </article>
+    <article class="kpi-card">
+      <span class="kpi-label">Total Debt</span>
+      <span class="kpi-value danger" id="kpi-debt">$0</span>
+      <span class="kpi-sub" id="kpi-debt-split"></span>
+    </article>
+    <article class="kpi-card kpi-credit">
+      <span class="kpi-label">Credit Score</span>
+      <div class="gauge-wrap">
+        <svg viewBox="0 0 120 70" class="gauge">
+          <path class="gauge-track" d="M 10 65 A 50 50 0 0 1 110 65" />
+          <path class="gauge-fill" id="gauge-fill" d="M 10 65 A 50 50 0 0 1 110 65" />
+        </svg>
+        <span class="gauge-value" id="kpi-credit">—</span>
+      </div>
+    </article>
+  </div>
+
+  <main class="game-grid">
+    <div class="col-left">
+      <article class="panel">
+        <div class="panel-head">
+          <h3>Net Worth Trajectory</h3>
+          <div class="reward-chips" id="reward-chips"></div>
+        </div>
+        <div class="chart-box"><canvas id="chart-networth"></canvas></div>
+      </article>
+
+      <div class="panel-duo">
+        <article class="panel">
+          <h3>Portfolio Allocation</h3>
+          <div class="chart-box donut"><canvas id="chart-portfolio"></canvas></div>
+        </article>
+        <article class="panel">
+          <h3>Activity Log</h3>
+          <ul class="log" id="activity-log"></ul>
+        </article>
+      </div>
+    </div>
+
+    <aside class="col-right">
+      <article class="panel action-panel">
+        <h3>Your Move <span class="month-label" id="action-month-label"></span></h3>
+
+        <div class="event-banner" id="event-banner" hidden></div>
+
+        <div class="action-groups" id="action-groups"><!-- injected --></div>
+
+        <div class="amount-row" id="amount-row">
+          <label>Amount
+            <input type="number" id="amount-input" min="0" step="500" value="5000" />
+          </label>
+          <div class="quick-amounts">
+            <button data-pct="0.25">25%</button>
+            <button data-pct="0.5">50%</button>
+            <button data-pct="1">MAX</button>
+          </div>
+        </div>
+
+        <p class="action-hint" id="action-hint">Pick an action to see what it does.</p>
+
+        <button class="btn btn-primary btn-lg btn-block" id="btn-step" disabled>
+          End Month <span class="arrow">→</span>
+        </button>
+      </article>
+
+      <article class="panel cash-panel">
+        <h3>Monthly Cash Flow</h3>
+        <ul class="cash-lines">
+          <li><span>Income</span><strong class="pos" id="cf-income">+$0</strong></li>
+          <li><span>Fixed expenses</span><strong class="neg" id="cf-fixed">−$0</strong></li>
+          <li><span>Variable expenses</span><strong class="neg" id="cf-variable">−$0</strong></li>
+          <li class="total"><span>Net</span><strong id="cf-net">$0</strong></li>
+        </ul>
+        <p class="cash-note">Credit card +3%/mo · Loan +1%/mo · Property rent 1%/mo − 0.2% upkeep</p>
+      </article>
+    </aside>
+  </main>
+</section>
+
+<!-- ============================== RESULTS MODAL ============================== -->
+<div class="modal-backdrop" id="results-modal" hidden>
+  <div class="modal">
+    <h2 id="result-title">Episode Complete</h2>
+    <div class="score-ring-wrap">
+      <svg viewBox="0 0 200 200" class="score-ring">
+        <circle class="ring-track" cx="100" cy="100" r="84" />
+        <circle class="ring-fill" id="ring-fill" cx="100" cy="100" r="84" />
+      </svg>
+      <div class="ring-center">
+        <span class="ring-score" id="ring-score">0.00</span>
+        <span class="ring-grade" id="ring-grade">—</span>
+      </div>
+    </div>
+    <div class="breakdown" id="score-breakdown"></div>
+    <div class="result-stats" id="result-stats"></div>
+    <button class="btn btn-primary btn-lg btn-block" id="btn-again">Play Again</button>
+  </div>
+</div>
+
+<div class="toast-stack" id="toast-stack"></div>
+
+<script src="app.js?v=3"></script>
+</body>
+</html>

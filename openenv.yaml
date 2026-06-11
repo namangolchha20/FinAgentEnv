@@ -1,6 +1,9 @@
 name: FinAgentEnv
-description: Personal finance environment with debt, investments, market regimes, and life events.
-version: 1.0.0
+description: >-
+  OpenEnv personal finance simulation. Agents manage cash flow, debt, eight
+  asset classes, real estate, credit score, and weighted life events across
+  six monthly steps under bull/bear/sideways market regimes.
+version: 2.0.0
 entry_point: env.environment:FinAgentEnv
 tasks:
   - id: debt_trap

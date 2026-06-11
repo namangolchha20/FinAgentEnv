@@ -4,19 +4,31 @@ build-backend = "hatchling.build"
 
 [project]
 name = "finagent_env"
-version = "1.0.0"
-description = "Financial decision-making environment for OpenEnv"
+version = "2.0.0"
+description = "OpenEnv personal finance simulation for training and evaluating decision-making agents"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.10"
+
+[project.urls]
+Homepage = "https://github.com/namangolchha20/FinAgentEnv"
+Repository = "https://github.com/namangolchha20/FinAgentEnv"
 dependencies = [
     "pydantic>=2.0",
     "openenv-core>=0.2.0",
     "fastapi",
-    "uvicorn",
+    "uvicorn[standard]",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "openai>=1.0.0"]
 
 [project.scripts]
 server = "server.app:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["env", "server"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

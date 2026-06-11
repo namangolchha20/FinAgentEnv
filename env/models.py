@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List
 
 class Debt(BaseModel):
     credit_card: float
@@ -19,6 +19,9 @@ class Info(BaseModel):
     failures: List[str]
     regime: str
     event: str
+    cash_flow: float = 0.0          # income - expenses applied this month
+    action_ok: bool = True          # whether the submitted action was valid
+    action_message: str = ""        # human-readable result of the action
 
 class Observation(BaseModel):
     month: int
@@ -35,9 +38,33 @@ class Observation(BaseModel):
     investments: Investments
     market_regime: str
     event: str
+    net_worth: float = 0.0
+
+ACTION_TYPES = [
+    "pay_credit_card",
+    "pay_personal_loan",
+    "invest_stocks",
+    "invest_crypto",
+    "invest_bonds",
+    "invest_fd",
+    "invest_mutual_funds",
+    "invest_commodities",
+    "sell_stocks",
+    "sell_crypto",
+    "sell_bonds",
+    "sell_fd",
+    "sell_mutual_funds",
+    "sell_commodities",
+    "buy_real_estate",
+    "sell_real_estate",
+    "build_emergency_fund",
+    "withdraw_emergency_fund",
+    "reduce_spending",
+    "hold",
+]
 
 class Action(BaseModel):
-    action_type: str   # one of: pay_credit_card, pay_personal_loan, invest_stocks, invest_crypto, invest_bonds, invest_fd, invest_mutual_funds, invest_commodities, buy_real_estate, build_emergency_fund, reduce_spending
+    action_type: str   # one of ACTION_TYPES
     amount: float = 0.0
 
 class StepResult(BaseModel):

@@ -5,113 +5,170 @@ colorFrom: green
 colorTo: indigo
 sdk: docker
 pinned: false
+app_port: 7860
 ---
 
-# FinAgentEnv – Personal Finance Decision-Making Environment
+# FinAgentEnv
 
-## Overview
-FinAgentEnv simulates realistic personal finance management over 6 months (6 steps). An agent must manage income, expenses, debt, investments, credit score, and unexpected life events (medical, job loss, bonus) under changing market regimes (bull, bear, sideways). The environment is designed for training and evaluating AI agents on real-world financial planning.
+**OpenEnv-compatible personal finance simulation** for training and evaluating AI agents.
 
-## Motivation
-Financial decisions involve complex trade-offs: paying debt vs investing, maintaining liquidity vs maximizing returns, managing credit risk vs spending flexibility. This environment provides a structured, reproducible benchmark for these decisions.
+An agent manages six monthly steps of real-world financial decisions: cash flow, debt, eight asset classes, real estate, credit score, and stochastic life events — all under shifting market regimes (`bull`, `bear`, `sideways`).
 
-## Action Space
-The agent chooses one action per step. Actions are typed with an optional amount (float).
+## Quick start
 
-| Action Type | Description | Amount usage |
-|-------------|-------------|--------------|
-| pay_credit_card | Reduce credit card debt | Amount to pay (<= savings) |
-| pay_personal_loan | Reduce personal loan debt | Amount to pay (<= savings) |
-| invest_stocks | Buy stocks | Amount invested (<= savings) |
-| invest_crypto | Buy crypto | Amount invested (<= savings) |
-| invest_bonds | Buy bonds | Amount invested (<= savings) |
-| invest_fd | Buy fixed deposits | Amount invested (<= savings) |
-| invest_mutual_funds | Buy mutual funds | Amount invested (<= savings) |
-| invest_commodities | Buy commodities | Amount invested (<= savings) |
-| buy_real_estate | Purchase real estate (cost 50,000) | Not used (set 0) |
-| build_emergency_fund | Transfer savings to emergency fund | Amount to transfer (<= savings) |
-| reduce_spending | Cut variable expenses by 10% | Not used (set 0) |
-
-## Observation Space
-Each step returns a structured observation (Pydantic model). Key fields:
-- month: current month (1..6)
-- income, income_growth, fixed_expenses, variable_expenses
-- savings, emergency_fund
-- debt: credit_card, personal_loan
-- credit_score, credit_limit, credit_used
-- investments: stocks, crypto, bonds, fd, mutual_funds, commodities, real_estate
-- market_regime: "bull", "bear", or "sideways"
-- event: "none", "medical", "job_loss", "bonus"
-
-## Tasks (Easy -> Hard)
-
-| Task ID | Difficulty | Starting Conditions | Goal |
-|---------|-----------|---------------------|------|
-| debt_trap | Easy | High credit card debt ($35k), low savings ($5k), credit score 580 | Reduce debt, build emergency fund |
-| balanced_growth | Medium | Moderate debt ($25k total), savings $20k, credit score 650, bull market | Grow net worth while managing debt and credit |
-| adversarial_crash | Hard | Bear market, high investments ($15k stocks), emergency fund $15k, good credit 700 | Survive market downturn and negative events, preserve net worth |
-
-## Reward Function
-Dense reward (range approximately -1.0 to 1.0) based on:
-- Net worth change (scaled)
-- Debt reduction (penalty)
-- Credit score improvement (bonus)
-- Emergency fund adequacy (bonus/penalty)
-- Savings below $5k (penalty)
-Partial progress is rewarded at every step.
-
-## Graders
-Each task has a deterministic grader returning a score in [0.0, 1.0]:
-- debt_trap: focuses on credit card debt reduction and emergency fund.
-- balanced_growth: combines net worth growth, debt management, and credit score.
-- adversarial_crash: rewards positive net worth, emergency fund size, and credit score >=650.
-
-## Setup & Usage
-
-### Local Installation
-pip install -r requirements.txt
+```bash
+git clone https://github.com/namangolchha20/FinAgentEnv.git
+cd FinAgentEnv
+pip install -r requirements-dev.txt
 pip install -e .
-
-### Validate OpenEnv compliance
 openenv validate
+python -m pytest tests/ -q
+```
 
-### Run Baseline Agent (requires OpenAI API key)
-On Windows PowerShell:
-$env:OPENAI_API_KEY="your_key_here"
+Run the HTTP server (used by Hugging Face Spaces):
+
+```bash
+python -m uvicorn server.app:app --host 0.0.0.0 --port 7860
+```
+
+- **API docs:** http://localhost:7860/docs  
+- **Demo dashboard:** http://localhost:7860 (optional human UI)
+
+## Environment API
+
+```python
+from env import FinAgentEnv
+from env.models import Action
+
+env = FinAgentEnv()
+obs = env.reset(task_id="debt_trap", seed=42)
+
+result = env.step(Action(action_type="pay_credit_card", amount=5000))
+print(result.observation.net_worth, result.reward, result.done)
+
+state = env.state()  # full internal dict
+```
+
+| Method | Returns |
+|--------|---------|
+| `reset(task_id, seed)` | `Observation` — starting state for the episode |
+| `step(action)` | `StepResult` — `observation`, `reward`, `done`, `info` |
+| `state()` | `dict` — copy of current environment state |
+
+### Tasks
+
+| Task ID | Difficulty | Goal |
+|---------|-----------|------|
+| `debt_trap` | Easy | Reduce credit card debt, build emergency fund ≥ $10k |
+| `balanced_growth` | Medium | Grow net worth while managing debt and credit |
+| `adversarial_crash` | Hard | Survive bear market + harsh events with positive NW |
+
+Graders live in `env/graders.py` and are registered in `openenv.yaml`.
+
+### Action space (20 actions)
+
+```json
+{"action_type": "pay_credit_card", "amount": 5000}
+```
+
+| Category | Actions |
+|----------|---------|
+| Debt | `pay_credit_card`, `pay_personal_loan` |
+| Invest | `invest_stocks`, `invest_mutual_funds`, `invest_crypto`, `invest_bonds`, `invest_fd`, `invest_commodities` |
+| Sell | `sell_stocks`, `sell_mutual_funds`, `sell_crypto`, `sell_bonds`, `sell_fd`, `sell_commodities` |
+| Real estate | `buy_real_estate` (min $50k), `sell_real_estate` (5% fee) |
+| Safety | `build_emergency_fund`, `withdraw_emergency_fund` |
+| Lifestyle | `reduce_spending`, `hold` |
+
+Invalid or unaffordable actions are rejected (`info.action_ok = false`), state is unchanged, reward is penalized by −0.1.
+
+### Observation
+
+Key fields: `month`, `income`, `fixed_expenses`, `variable_expenses`, `savings`, `emergency_fund`, `net_worth`, `debt`, `credit_score`, `credit_used`, `investments`, `market_regime`, `event`.
+
+`info` per step: `net_worth`, `cash_flow`, `action_ok`, `action_message`, `failures`, `regime`, `event`.
+
+### Reward (dense, clipped to [−1, 1])
+
+Net worth change, debt penalty, credit score bonus, emergency fund adequacy, low-savings penalty, invalid-action penalty. See `env/finance_engine.py` → `compute_reward`.
+
+## HTTP API (FastAPI)
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /health` | Liveness probe |
+| `GET /tasks` | Task metadata + action types |
+| `POST /reset?task_id&seed&session_id` | Start episode |
+| `POST /step?session_id` | Apply action |
+| `GET /state?session_id` | Current state |
+| `POST /grade?session_id` | Task grader + score breakdown |
+
+Default `session_id` is `"default"`. Each session gets its own `FinAgentEnv` instance.
+
+## Baseline evaluator (optional)
+
+`inference.py` runs a fixed LLM through all three tasks for benchmarking — **not training**.
+
+```bash
+export OPENAI_API_KEY=your_key
 python inference.py
+```
 
-On Linux/macOS:
-export OPENAI_API_KEY=your_key_here
-python inference.py
+| Variable | Default |
+|----------|---------|
+| `OPENAI_API_KEY` / `API_KEY` | required |
+| `API_BASE_URL` | `https://api.openai.com/v1` |
+| `MODEL_NAME` | `gpt-4o-mini` |
 
-### Run Docker Container (server)
+## Deploy to Hugging Face Spaces
+
+1. Create a new **Docker** Space (public).
+2. Push this repo — the README frontmatter (`sdk: docker`, `app_port: 7860`) is already set.
+3. The `Dockerfile` builds and starts uvicorn on port **7860**.
+4. Verify: `POST /reset` returns a valid observation JSON.
+
+```bash
 docker build -t finagent .
 docker run -p 7860:7860 finagent
-Then visit http://localhost:7860/docs to interact with the API.
+curl -X POST "http://localhost:7860/reset?task_id=debt_trap&seed=42"
+```
 
-## Baseline Scores (with gpt-4o-mini)
-These are estimated; actual scores may vary.
+## Project layout
 
-| Task | Score (0-1) |
-|------|-------------|
-| debt_trap | 0.68 |
-| balanced_growth | 0.62 |
-| adversarial_crash | 0.55 |
-| Average | 0.62 |
+```
+env/
+  config.py           # simulation constants
+  models.py           # Pydantic Observation / Action / StepResult
+  finance_engine.py   # pure simulation logic
+  environment.py      # FinAgentEnv (OpenEnv entry point)
+  tasks.py            # task definitions
+  graders.py          # deterministic task graders
+server/app.py         # FastAPI wrapper + optional dashboard
+frontend/             # optional demo UI (not required for training)
+inference.py          # optional LLM baseline evaluator
+openenv.yaml          # OpenEnv manifest
+tests/test_env.py     # pytest suite (25 tests)
+```
 
-## Environment Variables for Inference
-- OPENAI_API_KEY (required)
-- API_BASE_URL (default https://api.openai.com/v1)
-- MODEL_NAME (default gpt-4o-mini)
+## OpenEnv compliance
 
-## OpenEnv Compliance
-- Implements reset(task_id, seed) -> Observation, step(action) -> StepResult, state() -> dict
-- Uses typed Pydantic models for Observation, Action, StepResult
-- Includes openenv.yaml with three tasks and grader references
-- Passes openenv validate
+- `reset(task_id, seed) → Observation`
+- `step(action) → StepResult`
+- `state() → dict`
+- Typed Pydantic models
+- `openenv.yaml` with three tasks and grader references
+- Deterministic under a fixed seed
+- Passes `openenv validate`
 
-## Docker & Hugging Face Space
-The environment is packaged as a Docker container listening on port 7860. Deploy to Hugging Face Spaces with Docker SDK. The Space must be public and respond to POST /reset with a valid observation.
+## Development
+
+```bash
+pip install -r requirements-dev.txt
+pip install -e .
+python -m pytest tests/ -q
+openenv validate
+```
 
 ## License
-MIT
+
+MIT — see [LICENSE](LICENSE).

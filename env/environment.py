@@ -1,115 +1,108 @@
 import random
-from openenv.core.env_server import Environment
+
+try:
+    from openenv.core.env_server import Environment
+except ImportError:  # allow local use without openenv installed
+    class Environment:
+        pass
+
 from .models import Observation, Action, StepResult, Debt, Investments, Info
+from .tasks import get_task
+from . import config as cfg
 from .finance_engine import (
-    apply_action, apply_interest, simulate_market, apply_real_estate_income,
-    switch_regime, apply_event, update_credit_score, compute_net_worth,
-    compute_reward, failure_analysis
+    apply_action, apply_cash_flow, apply_interest, simulate_market,
+    apply_real_estate_cashflow, switch_regime, apply_event,
+    update_credit_score, compute_net_worth, compute_reward, failure_analysis,
 )
+
 
 class FinAgentEnv(Environment):
     def __init__(self):
-        self.max_months = 6
+        self.max_months = cfg.MAX_MONTHS
         self._rng = None
-        self.state = None
+        self._state = None
+
+    # ------------------------------------------------------------- API
 
     def reset(self, task_id: str = None, seed: int = None) -> Observation:
-        # Set up deterministic RNG
-        if seed is not None:
-            self._rng = random.Random(seed)
-        else:
-            self._rng = random.Random()
+        self._rng = random.Random(seed) if seed is not None else random.Random()
 
-        # Task-specific initial conditions
-        if task_id == "debt_trap":
-            # High credit card debt, low savings
-            debt = Debt(credit_card=35000, personal_loan=20000)
-            investments = Investments(stocks=0, crypto=0, bonds=0, fd=0,
-                                      mutual_funds=0, commodities=0, real_estate=0)
-            savings = 5000
-            emergency_fund = 0
-            credit_score = 580
-            market_regime = "sideways"
-        elif task_id == "balanced_growth":
-            debt = Debt(credit_card=15000, personal_loan=10000)
-            investments = Investments(stocks=5000, crypto=0, bonds=2000, fd=5000,
-                                      mutual_funds=3000, commodities=2000, real_estate=0)
-            savings = 20000
-            emergency_fund = 5000
-            credit_score = 650
-            market_regime = "bull"
-        elif task_id == "adversarial_crash":
-            debt = Debt(credit_card=8000, personal_loan=5000)
-            investments = Investments(stocks=15000, crypto=2000, bonds=5000, fd=10000,
-                                      mutual_funds=8000, commodities=3000, real_estate=0)
-            savings = 25000
-            emergency_fund = 15000
-            credit_score = 700
-            market_regime = "bear"   # immediate crash
-        else:
-            # default balanced
-            debt = Debt(credit_card=20000, personal_loan=30000)
-            investments = Investments(stocks=5000, crypto=0, bonds=2000, fd=5000,
-                                      mutual_funds=3000, commodities=2000, real_estate=0)
-            savings = 20000
-            emergency_fund = 0
-            credit_score = 650
-            market_regime = "bull"
+        task = get_task(task_id)
+        init = task["initial"]
 
-        self.state = {
+        self._state = {
             "month": 1,
-            "income": 50000,
-            "income_growth": 0.05,
-            "fixed_expenses": 20000,
-            "variable_expenses": 10000,
-            "savings": savings,
-            "emergency_fund": emergency_fund,
-            "debt": debt,
-            "credit_score": credit_score,
-            "credit_limit": 50000,
-            "credit_used": debt.credit_card,
-            "investments": investments,
-            "market_regime": market_regime,
-            "event": "none"
+            "income": cfg.STARTING_INCOME,
+            "income_growth": cfg.INCOME_GROWTH_ANNUAL,
+            "fixed_expenses": cfg.FIXED_EXPENSES,
+            "variable_expenses": cfg.VARIABLE_EXPENSES,
+            "savings": float(init["savings"]),
+            "emergency_fund": float(init["emergency_fund"]),
+            "debt": Debt(**init["debt"]),
+            "credit_score": float(init["credit_score"]),
+            "credit_limit": cfg.CREDIT_LIMIT,
+            "credit_used": float(init["debt"]["credit_card"]),
+            "investments": Investments(**init["investments"]),
+            "market_regime": init["market_regime"],
+            "event": "none",
+            "event_profile": task["event_profile"],
         }
-
-        obs = Observation(**self.state)
-        return obs
+        return self._make_observation()
 
     def step(self, action: Action) -> StepResult:
-        prev_net = compute_net_worth(self.state)
+        if self._state is None:
+            raise RuntimeError("step() called before reset()")
 
-        # Apply action
-        apply_action(self.state, action)
-        # Apply interest on debt
-        apply_interest(self.state)
-        # Market simulation (uses self._rng)
-        simulate_market(self.state, self._rng)
-        # Rental income
-        apply_real_estate_income(self.state)
-        # Regime switch
-        switch_regime(self.state, self._rng)
-        # Random life event
-        apply_event(self.state, self._rng)
-        # Credit score update
-        update_credit_score(self.state)
+        s = self._state
+        prev_net = compute_net_worth(s)
 
-        self.state["month"] += 1
+        # 1. agent allocates this month's money
+        action_ok, action_msg = apply_action(s, action)
+        # 2. salary arrives, living expenses are paid
+        cash_flow = apply_cash_flow(s)
+        # 3. debt accrues interest
+        apply_interest(s)
+        # 4. markets move
+        simulate_market(s, self._rng)
+        # 5. property pays rent, costs maintenance
+        apply_real_estate_cashflow(s)
+        # 6. life happens
+        apply_event(s, self._rng)
+        # 7. regime may shift for next month
+        switch_regime(s, self._rng)
+        # 8. credit bureau updates
+        update_credit_score(s)
 
-        curr_net = compute_net_worth(self.state)
-        reward = compute_reward(prev_net, curr_net, self.state)
+        s["month"] += 1
 
-        done = self.state["month"] > self.max_months
+        curr_net = compute_net_worth(s)
+        reward = compute_reward(prev_net, curr_net, s, action_ok)
+        done = s["month"] > self.max_months
 
         info = Info(
             net_worth=curr_net,
-            failures=failure_analysis(self.state),
-            regime=self.state["market_regime"],
-            event=self.state["event"]
+            failures=failure_analysis(s),
+            regime=s["market_regime"],
+            event=s["event"],
+            cash_flow=cash_flow,
+            action_ok=action_ok,
+            action_message=action_msg,
         )
-
-        obs = Observation(**self.state)
-        return StepResult(observation=obs, reward=reward, done=done, info=info)
+        return StepResult(observation=self._make_observation(), reward=reward,
+                          done=done, info=info)
 
     def state(self) -> dict:
-        return self.state.copy()
+        if self._state is None:
+            return {}
+        out = dict(self._state)
+        out["debt"] = self._state["debt"].model_copy()
+        out["investments"] = self._state["investments"].model_copy()
+        return out
+
+    # ------------------------------------------------------------- internals
+
+    def _make_observation(self) -> Observation:
+        s = self._state
+        fields = {k: v for k, v in s.items()
+                  if k in Observation.model_fields}
+        return Observation(**fields, net_worth=compute_net_worth(s))

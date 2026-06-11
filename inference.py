@@ -1,127 +1,157 @@
-import asyncio
+"""Baseline LLM agent for FinAgentEnv.
+
+Imports the canonical environment and graders from the ``env`` package
+(no duplicated simulation logic) and runs an OpenAI-compatible model
+over all three tasks.
+
+Environment variables:
+    OPENAI_API_KEY  (or API_KEY)   required
+    API_BASE_URL                   optional, default https://api.openai.com/v1
+    MODEL_NAME                     optional, default gpt-4o-mini
+"""
+import json
 import os
 import sys
-import json
-from typing import List
+import traceback
 
-# Add current directory to path so 'env' package can be found
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from openai import OpenAI
 from env.environment import FinAgentEnv
-from env.models import Action
+from env.models import Action, ACTION_TYPES
+from env.graders import grade
+from env import config as cfg
 
-API_BASE_URL = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
-API_KEY = os.getenv("OPENAI_API_KEY")
-MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
+SUCCESS_THRESHOLD = 0.6
 
-MAX_STEPS = 6
-SUCCESS_SCORE_THRESHOLD = 0.6
-TASKS = ["debt_trap", "balanced_growth", "adversarial_crash"]
 
 def log_start(task: str, env: str, model: str):
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
+
 def log_step(step: int, action: str, reward: float, done: bool, error: str = None):
     print(f"[STEP] step={step} action={action} reward={reward:.2f} done={done} error={error}", flush=True)
 
-def log_end(success: bool, steps: int, score: float, rewards: List[float]):
+
+def log_end(success: bool, steps: int, score: float, rewards: list):
     print(f"[END] success={success} steps={steps} score={score:.2f} rewards={rewards}", flush=True)
 
-def get_llm_action(client: OpenAI, obs, step: int, last_reward: float, history: List[str]) -> Action:
-    prompt = f"""You are a financial advisor. Based on the current financial state, choose ONE action and an amount (if applicable). 
-Current month: {obs.month}
-Income: {obs.income}, Fixed expenses: {obs.fixed_expenses}, Variable expenses: {obs.variable_expenses}
-Savings: {obs.savings}, Emergency fund: {obs.emergency_fund}
-Debt: credit_card={obs.debt.credit_card}, personal_loan={obs.debt.personal_loan}
-Credit score: {obs.credit_score}
-Investments: stocks={obs.investments.stocks}, crypto={obs.investments.crypto}, bonds={obs.investments.bonds}, real_estate={obs.investments.real_estate}
-Market regime: {obs.market_regime}, Event: {obs.event}
-Last step reward: {last_reward:.2f}
-History: {history[-3:]}
 
-Possible actions: pay_credit_card, pay_personal_loan, invest_stocks, invest_crypto, invest_bonds, invest_fd, invest_mutual_funds, invest_commodities, buy_real_estate, build_emergency_fund, reduce_spending.
-Respond with a JSON object: {{"action_type": "...", "amount": <number>}}.
-If action does not use amount, set amount to 0."""
-    
+def make_client():
     try:
-        response = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            response_format={"type": "json_object"}
-        )
-        content = response.choices[0].message.content
-        data = json.loads(content)
-        return Action(action_type=data["action_type"], amount=float(data.get("amount", 0)))
-    except Exception as e:
-        print(f"[DEBUG] LLM call failed: {e}", flush=True)
-        return Action(action_type="reduce_spending", amount=0)
+        from openai import OpenAI
+    except ImportError as e:
+        print(f"[FATAL] Cannot import openai: {e}", flush=True)
+        raise
 
-async def run_task(task_id: str, seed: int = 42):
+    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY")
+    if not api_key:
+        print("[FATAL] OPENAI_API_KEY (or API_KEY) environment variable not set", flush=True)
+        sys.exit(1)
+    api_base = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
+    return OpenAI(base_url=api_base, api_key=api_key)
+
+
+def build_prompt(obs, last_reward: float, last_message: str, history: list) -> str:
+    inv = obs.investments
+    return f"""You are a financial advisor agent. Based on the current financial state, choose ONE action and an amount.
+Month: {obs.month}/{cfg.MAX_MONTHS}
+Income: {obs.income:.0f}/mo, Fixed expenses: {obs.fixed_expenses:.0f}, Variable expenses: {obs.variable_expenses:.0f}
+Savings: {obs.savings:.0f}, Emergency fund: {obs.emergency_fund:.0f} (target: {cfg.EF_TARGET_MONTHS}x fixed expenses)
+Debt: credit_card={obs.debt.credit_card:.0f} (3%/mo interest), personal_loan={obs.debt.personal_loan:.0f} (1%/mo interest)
+Credit score: {obs.credit_score:.0f} (utilization {obs.credit_used:.0f}/{obs.credit_limit:.0f})
+Investments: stocks={inv.stocks:.0f}, crypto={inv.crypto:.0f}, bonds={inv.bonds:.0f}, fd={inv.fd:.0f}, mutual_funds={inv.mutual_funds:.0f}, commodities={inv.commodities:.0f}, real_estate={inv.real_estate:.0f}
+Real estate pays {cfg.RENTAL_YIELD_MONTHLY:.0%}/mo rent minus {cfg.MAINTENANCE_RATE_MONTHLY:.1%}/mo maintenance; min purchase {cfg.MIN_PROPERTY_PRICE:.0f}; {cfg.PROPERTY_SALE_FEE:.0%} fee on sale.
+Market regime: {obs.market_regime}, Last event: {obs.event}
+Net worth: {obs.net_worth:.0f}
+Last reward: {last_reward:.2f}. Last action result: {last_message or 'n/a'}
+History: {history[-3:]}
+Possible actions: {", ".join(ACTION_TYPES)}.
+Invalid or unaffordable actions are penalized. Respond with JSON: {{"action_type": "...", "amount": <number>}}"""
+
+
+def run_task(client, model_name: str, task_id: str, seed: int = 42) -> float:
     env = FinAgentEnv()
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
-    rewards = []
-    history = []
-
-    log_start(task=task_id, env="FinAgentEnv", model=MODEL_NAME)
+    rewards, history = [], []
+    log_start(task=task_id, env="FinAgentEnv", model=model_name)
 
     try:
         obs = env.reset(task_id=task_id, seed=seed)
     except Exception as e:
-        print(f"[DEBUG] reset failed: {e}", flush=True)
+        print(f"[ERROR] reset failed: {e}", flush=True)
+        traceback.print_exc()
         log_end(success=False, steps=0, score=0.0, rewards=[])
         return 0.0
 
     last_reward = 0.0
+    last_message = ""
 
-    for step in range(1, MAX_STEPS + 1):
+    for step_n in range(1, cfg.MAX_MONTHS + 1):
         try:
-            action = get_llm_action(client, obs, step, last_reward, history)
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user",
+                           "content": build_prompt(obs, last_reward, last_message, history)}],
+                temperature=0.7,
+                response_format={"type": "json_object"},
+            )
+            data = json.loads(response.choices[0].message.content)
+            action = Action(action_type=data["action_type"],
+                            amount=float(data.get("amount", 0)))
+        except Exception as e:
+            print(f"[ERROR] LLM call failed at step {step_n}: {e}", flush=True)
+            traceback.print_exc()
+            action = Action(action_type="hold", amount=0)
+
+        try:
             result = env.step(action)
             obs = result.observation
-            reward = result.reward
-            done = result.done
-            rewards.append(reward)
-            last_reward = reward
-            history.append(f"Step {step}: {action.action_type} (amount {action.amount}) -> reward {reward:.2f}")
-            log_step(step, action.action_type, reward, done, None)
-            if done:
+            last_reward = result.reward
+            last_message = result.info.action_message
+            rewards.append(result.reward)
+            history.append(f"Step {step_n}: {action.action_type} -> {result.reward:.2f}")
+            log_step(step_n, action.action_type, result.reward, result.done)
+            if result.done:
                 break
         except Exception as e:
-            print(f"[DEBUG] step {step} failed: {e}", flush=True)
-            log_step(step, "", 0.0, True, str(e))
+            print(f"[ERROR] step {step_n} execution failed: {e}", flush=True)
+            traceback.print_exc()
+            log_step(step_n, "", 0.0, True, str(e))
             break
 
-    # Use the appropriate grader
     try:
-        if task_id == "debt_trap":
-            from env.graders import grade_debt_trap
-            score = grade_debt_trap(env)
-        elif task_id == "balanced_growth":
-            from env.graders import grade_balanced_growth
-            score = grade_balanced_growth(env)
-        else:
-            from env.graders import grade_adversarial_crash
-            score = grade_adversarial_crash(env)
+        score = grade(task_id, env)
     except Exception as e:
-        print(f"[DEBUG] grader failed: {e}", flush=True)
+        print(f"[ERROR] grading failed: {e}", flush=True)
+        traceback.print_exc()
         score = 0.0
 
-    success = score >= SUCCESS_SCORE_THRESHOLD
-    log_end(success, len(rewards), score, rewards)
+    success = score >= SUCCESS_THRESHOLD
+    log_end(success, len(rewards), score, [round(r, 2) for r in rewards])
     return score
 
-async def main():
+
+def main():
+    client = make_client()
+    model_name = os.getenv("MODEL_NAME", "gpt-4o-mini")
+
+    tasks = ["debt_trap", "balanced_growth", "adversarial_crash"]
     scores = []
-    for task in TASKS:
-        score = await run_task(task, seed=42)
-        scores.append(score)
-    avg = sum(scores) / len(scores)
-    print(f"\n=== BASELINE SCORES ===")
-    for t, s in zip(TASKS, scores):
+    for task in tasks:
+        try:
+            scores.append(run_task(client, model_name, task, seed=42))
+        except Exception as e:
+            print(f"[ERROR] Task {task} failed: {e}", flush=True)
+            traceback.print_exc()
+            scores.append(0.0)
+
+    print("\n=== BASELINE SCORES ===")
+    for t, s in zip(tasks, scores):
         print(f"{t}: {s:.2f}")
-    print(f"Average: {avg:.2f}")
+    print(f"Average: {sum(scores) / len(scores):.2f}")
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        main()
+    except Exception as e:
+        print(f"[FATAL] Unhandled exception: {e}", flush=True)
+        traceback.print_exc()
+        sys.exit(1)
