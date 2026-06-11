@@ -93,6 +93,7 @@ const EVENT_TEXT = {
 
 /* ------------------------------------------------------------ state */
 let tasks = [];
+let serverActionTypes = [];
 let selectedTask = null;
 let obs = null;
 let selectedAction = null;
@@ -105,10 +106,32 @@ let chartNet = null;
 let chartPortfolio = null;
 
 /* ------------------------------------------------------------ start screen */
+function uiActionIds() {
+  return new Set(ACTION_GROUPS.flatMap((g) => g.actions.map((a) => a.id)));
+}
+
+function syncActionTypesFromServer(types) {
+  serverActionTypes = types || [];
+  const ui = uiActionIds();
+  const server = new Set(serverActionTypes);
+  const missing = [...ui].filter((id) => !server.has(id));
+  const extra = [...server].filter((id) => !ui.has(id));
+  if (missing.length || extra.length) {
+    console.warn("Action type drift between UI and server", { missing, extra });
+  }
+  document.querySelectorAll(".action-chip").forEach((chip) => {
+    const id = chip.dataset.action;
+    chip.disabled = serverActionTypes.length > 0 && !server.has(id);
+    chip.style.opacity = chip.disabled ? "0.35" : "";
+  });
+}
+
 async function loadTasks() {
   const res = await fetch(`${API}/tasks`);
+  if (!res.ok) throw new Error(`tasks HTTP ${res.status}`);
   const data = await res.json();
   tasks = data.tasks;
+  syncActionTypesFromServer(data.action_types);
   const grid = $("task-grid");
   grid.innerHTML = "";
   for (const t of tasks) {
@@ -294,13 +317,14 @@ function render() {
   // month track
   const track = $("month-track");
   track.innerHTML = "";
+  const done = obs.month > 6;
   for (let m = 1; m <= 6; m++) {
     const dot = document.createElement("div");
-    dot.className = "month-dot" + (m < obs.month ? " done" : m === obs.month ? " current" : "");
+    dot.className = "month-dot" + (done || m < obs.month ? " done" : m === obs.month ? " current" : "");
     dot.title = `Month ${m}`;
     track.appendChild(dot);
   }
-  $("action-month-label").textContent = obs.month <= 6 ? `Month ${obs.month} of 6` : "Done";
+  $("action-month-label").textContent = done ? "Episode complete" : `Month ${obs.month} of 6`;
 
   // cash flow panel
   $("cf-income").textContent = `+${fmtMoney(obs.income)}`;

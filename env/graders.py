@@ -66,7 +66,7 @@ def grade_breakdown(task_id: str, env) -> dict:
             {"label": "Credit card debt reduced",
              "score": max(0, (35000 - state["debt"].credit_card) / 35000) * 0.7,
              "max": 0.7},
-            {"label": "Emergency fund ≥ 10k",
+            {"label": "Emergency fund >= 10k",
              "score": 0.3 if state["emergency_fund"] >= 10000 else 0.0,
              "max": 0.3},
         ]
@@ -78,7 +78,7 @@ def grade_breakdown(task_id: str, env) -> dict:
             {"label": "Emergency fund coverage",
              "score": min(1.0, state["emergency_fund"] / required_ef) * 0.4,
              "max": 0.4},
-            {"label": "Credit score ≥ 650",
+            {"label": "Credit score >= 650",
              "score": 0.2 if state["credit_score"] >= 650 else 0.0, "max": 0.2},
         ]
     else:
