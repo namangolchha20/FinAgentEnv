@@ -1,4 +1,4 @@
 pydantic>=2.0
 openenv-core>=0.2.0
 fastapi
-uvicorn[standard]
+uvicorn
